@@ -2,195 +2,250 @@ const yapi = require('../yapi.js');
 const baseModel = require('./base.js');
 
 class projectModel extends baseModel {
-    getName() {
-        return 'project';
-    }
+  getName() {
+    return 'project';
+  }
 
-    getSchema() {
-        return {
-            uid: {type: Number, required: true},
-            name: {type: String, required: true},
-            basepath: {type: String},
-            desc: String,
-            group_id: {type: Number, required: true},
-            project_type: {type: String, required: true, enum: ['public', 'private']},
-            members: [
-                {uid: Number, role: {type: String, enum: ['owner', 'dev']}, username: String, email: String}
-            ],
-            env: [
-                {name: String, domain: String}
-            ],
-            icon: String,
-            color: String,
-            add_time: Number,
-            up_time: Number
-        };
-    }
+  getSchema() {
+    return {
+      uid: { type: Number, required: true },
+      name: { type: String, required: true },
+      basepath: { type: String },
+      switch_notice: { type: Boolean, default: true },
+      desc: String,
+      group_id: { type: Number, required: true },
+      project_type: { type: String, required: true, enum: ['public', 'private'] },
+      members: [
+        {
+          uid: Number,
+          role: { type: String, enum: ['owner', 'dev'] },
+          username: String,
+          email: String,
+          email_notice: { type: Boolean, default: true }
+        }
+      ],
+      env: [{ name: String, domain: String, header: Array, global: Array }],
+      icon: String,
+      color: String,
+      add_time: Number,
+      up_time: Number,
+      pre_script: String,
+      after_script: String,
+      project_mock_script: String,
+      is_mock_open: { type: Boolean, default: false },
+      strice: { type: Boolean, default: false },
+      is_json5: { type: Boolean, default: true },
+      tag: [{name: String, desc: String}]
+    };
+  }
 
-    updateMember(data) {
-        return this.model.update(
-            {
-                'members.uid': data.uid
-            }, {
-                "$set": {
-                    "members.$.username": data.username,
-                    "members.$.email": data.email
-                }
-            }
-        );
-    }
+  updateMember(data) {
+    return this.model.update(
+      {
+        'members.uid': data.uid
+      },
+      {
+        $set: {
+          'members.$.username': data.username,
+          'members.$.email': data.email
+        }
+      }
+    );
+  }
 
-    save(data) {
-        let m = new this.model(data);
-        return m.save();
-    }
+  save(data) {
+    let m = new this.model(data);
+    return m.save();
+  }
 
-    get(id) {
-        return this.model.findOne({
-            _id: id
-        }).exec();
-    }
+  get(id) {
+    return this.model
+      .findOne({
+        _id: id
+      })
+      .exec();
+  }
 
-    getProjectWithAuth(group_id, uid) {
-        return this.model.count({
-            "group_id": group_id,
-            "members.uid": uid
-        })
-    }
+  getByEnv(id) {
+    return this.model
+      .findOne({
+        _id: id
+      })
+      .select('env')
+      .exec();
+  }
 
-    getBaseInfo(id) {
-        return this.model.findOne({
-            _id: id
-        }).select('_id uid name basepath desc group_id project_type env icon color add_time up_time')
-            .exec()
-    }
+  getProjectWithAuth(group_id, uid) {
+    return this.model.countDocuments({
+      group_id: group_id,
+      'members.uid': uid
+    });
+  }
 
-    getByDomain(domain) {
-        return this.model.find({
-            prd_host: domain
-        }).exec();
-    }
+  getBaseInfo(id, select) {
+    select =
+      select ||
+      '_id uid name basepath switch_notice desc group_id project_type env icon color add_time up_time pre_script after_script project_mock_script is_mock_open strice is_json5 tag';
+    return this.model
+      .findOne({
+        _id: id
+      })
+      .select(select)
+      .exec();
+  }
 
-    checkNameRepeat(name) {
-        return this.model.count({
-            name: name
-        });
-    }
+  getByDomain(domain) {
+    return this.model
+      .find({
+        prd_host: domain
+      })
+      .exec();
+  }
 
-    checkDomainRepeat(domain, basepath) {
-        return this.model.count({
-            prd_host: domain,
-            basepath: basepath
-        });
-    }
+  checkNameRepeat(name, groupid) {
+    return this.model.countDocuments({
+      name: name,
+      group_id: groupid
+    });
+  }
 
-    list(group_id) {
-        let params = {group_id: group_id}
-        return this.model.find(params).select("_id uid name basepath desc group_id project_type color icon env add_time up_time").sort({_id: -1}).exec();
-    }
+  checkDomainRepeat(domain, basepath) {
+    return this.model.countDocuments({
+      prd_host: domain,
+      basepath: basepath
+    });
+  }
 
-    // 获取项目数量统计
-    getProjectListCount() {
-        return this.model.count();
-    }
+  list(group_id) {
+    let params = { group_id: group_id };
+    return this.model
+      .find(params)
+      .select(
+        '_id uid name basepath switch_notice desc group_id project_type color icon env add_time up_time'
+      )
+      .sort({ _id: -1 })
+      .exec();
+  }
 
-    countWithPublic(group_id) {
-        let params = {group_id: group_id, project_type: 'public'};
-        return this.model.count(params);
-    }
+  // 获取项目数量统计
+  getProjectListCount() {
+    return this.model.countDocuments();
+  }
 
-    listWithPaging(group_id, page, limit) {
-        page = parseInt(page);
-        limit = parseInt(limit);
-        return this.model.find({
-            group_id: group_id
-        }).sort({_id: -1}).skip((page - 1) * limit).limit(limit).exec();
-    }
+  countWithPublic(group_id) {
+    let params = { group_id: group_id, project_type: 'public' };
+    return this.model.countDocuments(params);
+  }
 
-    listCount(group_id) {
-        return this.model.count({
-            group_id: group_id
-        });
-    }
+  listWithPaging(group_id, page, limit) {
+    page = parseInt(page);
+    limit = parseInt(limit);
+    return this.model
+      .find({
+        group_id: group_id
+      })
+      .sort({ _id: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .exec();
+  }
 
-    countByGroupId(group_id) {
-        return this.model.count({
-            group_id: group_id
-        });
-    }
+  listCount(group_id) {
+    return this.model.countDocuments({
+      group_id: group_id
+    });
+  }
 
-    del(id) {
-        return this.model.remove({
-            _id: id
-        });
-    }
+  countByGroupId(group_id) {
+    return this.model.countDocuments({
+      group_id: group_id
+    });
+  }
 
-    delByGroupid(groupId) {
-        return this.model.remove({
-            group_id: groupId
-        })
-    }
+  del(id) {
+    return this.model.remove({
+      _id: id
+    });
+  }
 
-    up(id, data) {
-        data.up_time = yapi.commons.time();
-        return this.model.update({
-            _id: id
-        }, data, {runValidators: true});
-    }
+  delByGroupid(groupId) {
+    return this.model.remove({
+      group_id: groupId
+    });
+  }
 
-    addMember(id, data) {
-        return this.model.update(
-            {
-                _id: id
-            }, {
-                // $push: { members: data }
-                $push: {members: {$each: data}}
-            }
-        );
-    }
+  up(id, data) {
+    data.up_time = yapi.commons.time();
+    return this.model.update(
+      {
+        _id: id
+      },
+      data,
+      { runValidators: true }
+    );
+  }
 
-    delMember(id, uid) {
-        return this.model.update(
-            {
-                _id: id
-            }, {
-                $pull: {members: {uid: uid}}
-            }
-        );
-    }
+  addMember(id, data) {
+    return this.model.update(
+      {
+        _id: id
+      },
+      {
+        // $push: { members: data }
+        $push: { members: { $each: data } }
+      }
+    );
+  }
 
-    checkMemberRepeat(id, uid) {
-        return this.model.count({
-            _id: id,
-            "members.uid": uid
-        });
-    }
+  delMember(id, uid) {
+    return this.model.update(
+      {
+        _id: id
+      },
+      {
+        $pull: { members: { uid: uid } }
+      }
+    );
+  }
 
-    changeMemberRole(id, uid, role) {
-        return this.model.update(
-            {
-                _id: id,
-                "members.uid": uid
-            }, {
-                "$set": {"members.$.role": role}
-            }
-        );
-    }
+  checkMemberRepeat(id, uid) {
+    return this.model.countDocuments({
+      _id: id,
+      'members.uid': uid
+    });
+  }
 
-    search(keyword) {
-        return this.model.find({
-            name: new RegExp(keyword, 'ig')
-        })
-            .limit(10);
-    }
+  changeMemberRole(id, uid, role) {
+    return this.model.update(
+      {
+        _id: id,
+        'members.uid': uid
+      },
+      {
+        $set: { 'members.$.role': role }
+      }
+    );
+  }
 
-    download(id) {
-        console.log('models in download');
-        // return this.model.find({
-        //     name: new RegExp(id, 'ig')
-        // })
-        //     .limit(10);
-    }
+  changeMemberEmailNotice(id, uid, notice) {
+    return this.model.update(
+      {
+        _id: id,
+        'members.uid': uid
+      },
+      {
+        $set: { 'members.$.email_notice': notice }
+      }
+    );
+  }
+
+  search(keyword) {
+    return this.model
+      .find({
+        name: new RegExp(keyword, 'ig')
+      })
+      .limit(10);
+  }
 }
 
 module.exports = projectModel;

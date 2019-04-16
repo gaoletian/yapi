@@ -1,6 +1,6 @@
-export default {
+module.exports = {
   PAGE_LIMIT: 10, // 默认每页展示10条数据
-  NAME_LIMIT: 30, // 限制名称的字符长度(中文算两个长度)
+  NAME_LIMIT: 100, // 限制名称的字符长度(中文算两个长度)
   HTTP_METHOD: {
     'GET': {
       request_body: false,
@@ -167,7 +167,7 @@ export default {
   ],
   IP_REGEXP: /^(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])(\.(\d{1,2}|1\d\d|2[0-4]\d|25[0-5])){3}$/,
   docHref: {
-    adv_mock_case: 'http://yapi.qunar.com/adv_mock.html#Mock_期望',
-    adv_mock_script: 'http://yapi.qunar.com/adv_mock.html#自定义_Mock_脚本'
+    adv_mock_case: 'https://yapi.ymfe.org/documents/mock.html',
+    adv_mock_script: 'https://yapi.ymfe.org/documents/adv_mock.html'
   }
-}
+};

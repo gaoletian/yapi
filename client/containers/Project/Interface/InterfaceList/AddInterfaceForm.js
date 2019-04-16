@@ -1,4 +1,4 @@
-import React, { Component } from 'react'
+import React, { PureComponent as Component } from 'react'
 import PropTypes from 'prop-types'
 import { Form, Input, Select, Button } from 'antd';
 
@@ -102,6 +102,12 @@ class AddInterfaceForm extends Component {
           })(
             <Input onBlur={this.handlePath} addonBefore={prefixSelector} placeholder="/path" />
             )}
+        </FormItem>
+        <FormItem
+          {...formItemLayout}
+          label="注"
+        >
+          <span style={{ color: "#929292" }}>详细的接口数据可以在编辑页面中添加</span>
         </FormItem>
         <FormItem className="catModalfoot" wrapperCol={{ span: 24, offset: 8 }} >
           <Button onClick={this.props.onCancel} style={{ marginRight: "10px" }}  >取消</Button>

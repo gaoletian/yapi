@@ -5,7 +5,19 @@
   // overflow: hidden;
   .interface-edit-item{
     margin-bottom: 16px;
+    .ant-form-item-label label:after{
+      margin-left: 4px;
+    }
+
+    .interface-editor {
+      min-height: 300px;
+    }
   }
+
+  .interface-edit-json-info{
+    margin-bottom: 5px;
+  }
+
   .interface-edit-item.hide {
     display: none;
   }
@@ -13,6 +25,11 @@
     margin-bottom: 16px;
     .interface-edit-item-content-col{
       padding:0 1px;
+    }
+    .interface-edit-item-content-col-drag{
+      width:24px;
+      padding: 7px;
+      cursor: ns-resize;
     }
   }
   .interface-edit-del-icon{
@@ -34,16 +51,16 @@
   .ant-affix{
     background-color: #f3f4f6;
      padding: 16px 0;
-     z-index: 10002;
+     z-index: 999;
   }
   .interface-edit-submit-button{
-      background-color: #32325d;
+      background-color: #1d1d3d;
       color: #fff;
   }
 
   .interface-edit-submit-button:hover{
-    color: #32325d;
-    border-color: #32325d;
+    border-color: #434370;
+    background-color: #434370;
   }
 }
 
@@ -54,11 +71,20 @@
     table-layout: fixed;
   }
   .path {
-    width: 100%;
+    width: 95%;
+    display: inline-block;
     overflow: hidden;
     text-overflow:ellipsis;
     white-space: nowrap;
-    display: inline-block;
+    padding-right: 24px;
+    // line-height: 100%;
+    vertical-align: middle;
+  }
+
+  .opened {
+    color: #00a854;
+    padding-right: 6px;
+    font-size: 14px;
   }
   .colValue{
     display: inline-block;
@@ -84,70 +110,7 @@
   word-break: break-all;
 }
 
-// 容器：左侧是header 右侧是body
-.container-header-body {
-  display: flex;
-  padding-bottom: .36rem;
-  .header, .body {
-    flex: 1 0 300px;
-    .pretty-editor-header, .pretty-editor-body {
-      height: 100%;
-    }
-    .postman .pretty-editor-body {
-      min-height: 200px;
-    }
-    .ace_print-margin {
-      display: none;
-    }
-  }
-  .header {
-    max-width: 400px;
-  }
-  .container-title {
-    padding: .08rem 0;
-  }
-  .resizer {
-    flex: 0 0 21px;
-    position: relative;
-    &:after {
-      content: '';
-      display: block;
-      width: 1px;
-      height: 100%;
-      background-color: $color-text-dark;
-      opacity: .8;
-      position: absolute;
-      left: 10px;
-    }
-  }
-  // res body 无返回json时显示text信息
-  .res-body-text {
-    height: 100%;
-    border: 1px solid #d9d9d9;
-    border-radius: 4px;
-    padding: 8px;
-  }
+.tag-modal-center {
+  padding-left: 48px;
 }
-.ant-spin-blur {
-  .res-code.success {
-    background-color: transparent;
-  }
-  .res-code.fail {
-    background-color: transparent;
-  }
-}
-.res-code {
-  padding: .08rem .28rem;
-  color: #fff;
-  margin-left: -.28rem;
-  margin-right: -.28rem;
-  transition: all .2s;
-  position: relative;
-  border-radius: 2px;
-}
-.res-code.success {
-  background-color: $color-antd-green;
-}
-.res-code.fail {
-  background-color: $color-antd-red;
-}
+

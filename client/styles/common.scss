@@ -2,7 +2,7 @@
 
 
 html {
-  font-size:625%;
+  font-size:100px;
 }
 html, body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
@@ -27,7 +27,8 @@ html {
 /* 外层轨道 */
 ::-webkit-scrollbar-track {
   -webkit-box-shadow: inset006pxrgba(255,0,0,0.3);
-  background: rgba(0, 0, 0, 0.1);
+  // background-color: 
+  background: rgba(255, 255, 255, 0.1);
 }
 /* 滚动条滑块 */
 ::-webkit-scrollbar-thumb {
@@ -166,6 +167,26 @@ em {
 .ant-tabs.ant-tabs-card > .ant-tabs-bar .ant-tabs-tab-active{
   border: none;
 }
+
+.ant-tabs.ant-tabs-card > .ant-tabs-content{
+  margin-top: -1px;
+}
+
+.tabs-large .ant-tabs-nav-container{
+  font-size: 16px;
+}
+
+.ant-tree li .ant-tree-node-content-wrapper{
+  padding: 3px 5px;
+  height: unset;
+  // line-height: 25px;
+}
+
+.ant-tree li .ant-tree-node-content-wrapper.ant-tree-node-selected{
+  background-color: #d5ebfc;
+}
+
+
 
 // 页面级底部固定 需要添加padding以保证页面底部不被覆盖
 // .has-affix-footer {

@@ -1,855 +1,983 @@
-import React, { Component } from 'react'
-import PropTypes from 'prop-types'
-import Mock from 'mockjs'
-import { Button, Input, Checkbox, Select, Alert, Spin, Icon, Collapse, Tooltip, message, AutoComplete, Switch } from 'antd'
-import { autobind } from 'core-decorators';
-import constants from '../../constants/variable.js'
-
-import mockEditor from '../../containers/Project/Interface/InterfaceList/mockEditor'
-import URL from 'url';
-const MockExtra = require('common/mock-extra.js')
+import React, { PureComponent as Component } from 'react';
+import PropTypes from 'prop-types';
+import {
+  Button,
+  Input,
+  Checkbox,
+  Modal,
+  Select,
+  Spin,
+  Icon,
+  Collapse,
+  Tooltip,
+  Tabs,
+  Switch,
+  Row,
+  Col,
+  Alert
+} from 'antd';
+import constants from '../../constants/variable.js';
+import AceEditor from 'client/components/AceEditor/AceEditor';
+import _ from 'underscore';
+import { isJson, deepCopyJson, json5_parse } from '../../common.js';
+import axios from 'axios';
+import ModalPostman from '../ModalPostman/index.js';
+import CheckCrossInstall, { initCrossRequest } from './CheckCrossInstall.js';
 import './Postman.scss';
-import json5 from 'json5'
-import {  handleMockWord, isJson } from '../../common.js'
-import _ from "underscore"
+import ProjectEnv from '../../containers/Project/Setting/ProjectEnv/index.js';
+import json5 from 'json5';
+const { handleParamsValue, ArrayToObject, schemaValidator } = require('common/utils.js');
+const {
+  handleParams,
+  checkRequestBodyIsRaw,
+  handleContentType,
+  crossRequest,
+  checkNameIsExistInArray
+} = require('common/postmanLib.js');
 
-function json_parse(data) {
-  try {
-    return json5.parse(data)
-  } catch (e) {
-    return data
-  }
-}
-
-function isJsonData(headers) {
-  if (!headers || typeof headers !== 'object') return false;
-  let isResJson = false;
-  Object.keys(headers).map(key => {
-    if (/content-type/i.test(key) && /application\/json/i.test(headers[key])) {
-      isResJson = true;
-    }
-  })
-  return isResJson;
-}
-
-const wordList = constants.MOCK_SOURCE;
-
-const mockDataSource = wordList.map(item => {
-  return <AutoComplete.Option key={item.mock} value={item.mock}>
-    {item.mock}&nbsp; &nbsp;随机{item.name}
-  </AutoComplete.Option>
-});
-
-
-// const { TextArea } = Input;
+const HTTP_METHOD = constants.HTTP_METHOD;
 const InputGroup = Input.Group;
 const Option = Select.Option;
 const Panel = Collapse.Panel;
 
-const HTTP_METHOD = constants.HTTP_METHOD;
+export const InsertCodeMap = [
+  {
+    code: 'assert.equal(status, 200)',
+    title: '断言 httpCode 等于 200'
+  },
+  {
+    code: 'assert.equal(body.code, 0)',
+    title: '断言返回数据 code 是 0'
+  },
+  {
+    code: 'assert.notEqual(status, 404)',
+    title: '断言 httpCode 不是 404'
+  },
+  {
+    code: 'assert.notEqual(body.code, 40000)',
+    title: '断言返回数据 code 不是 40000'
+  },
+  {
+    code: 'assert.deepEqual(body, {"code": 0})',
+    title: '断言对象 body 等于 {"code": 0}'
+  },
+  {
+    code: 'assert.notDeepEqual(body, {"code": 0})',
+    title: '断言对象 body 不等于 {"code": 0}'
+  }
+];
+
+const ParamsNameComponent = props => {
+  const { example, desc, name } = props;
+  const isNull = !example && !desc;
+  const TooltipTitle = () => {
+    return (
+      <div>
+        {example && (
+          <div>
+            示例： <span className="table-desc">{example}</span>
+          </div>
+        )}
+        {desc && (
+          <div>
+            备注： <span className="table-desc">{desc}</span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {isNull ? (
+        <Input disabled value={name} className="key" />
+      ) : (
+        <Tooltip placement="topLeft" title={<TooltipTitle />}>
+          <Input disabled value={name} className="key" />
+        </Tooltip>
+      )}
+    </div>
+  );
+};
+ParamsNameComponent.propTypes = {
+  example: PropTypes.string,
+  desc: PropTypes.string,
+  name: PropTypes.string
+};
 
 export default class Run extends Component {
-
   static propTypes = {
-    data: PropTypes.object,
-    save: PropTypes.func,
-    saveTip: PropTypes.string,
-    type: PropTypes.string
-  }
-
-  state = {
-    res: null,
-    resHeader: null,
-    method: 'GET',
-    domains: [],
-    pathname: '',
-    query: [],
-    bodyForm: [],
-    headers: [],
-    caseEnv: '',
-    bodyType: '',
-    bodyOther: '',
-    loading: false,
-    validRes: [],
-    hasPlugin: true,
-    test_status: null,
-    resMockTest: true,
-    resStatusCode: null,
-    resStatusText: ''
-  }
+    data: PropTypes.object, //接口原有数据
+    save: PropTypes.func, //保存回调方法
+    type: PropTypes.string //enum[case, inter], 判断是在接口页面使用还是在测试集
+  };
 
   constructor(props) {
-    super(props)
+    super(props);
+    this.state = {
+      loading: false,
+      resStatusCode: null,
+      test_valid_msg: null,
+      resStatusText: null,
+      case_env: '',
+      mock_verify: false,
+      enable_script: false,
+      test_script: '',
+      hasPlugin: true,
+      inputValue: '',
+      cursurPosition: { row: 1, column: -1 },
+      envModalVisible: false,
+      test_res_header: null,
+      test_res_body: null,
+      ...this.props.data
+    };
+  }
+
+  checkInterfaceData(data) {
+    if (!data || typeof data !== 'object' || !data._id) {
+      return false;
+    }
+    return true;
+  }
+
+  // 整合header信息
+  handleReqHeader = (value, env) => {
+    let index = value
+      ? env.findIndex(item => {
+          return item.name === value;
+        })
+      : 0;
+    index = index === -1 ? 0 : index;
+
+    let req_header = [].concat(this.props.data.req_headers || []);
+    let header = [].concat(env[index].header || []);
+    header.forEach(item => {
+      if (!checkNameIsExistInArray(item.name, req_header)) {
+        item = {
+          ...item,
+          abled: true
+        };
+        req_header.push(item);
+      }
+    });
+    req_header = req_header.filter(item => {
+      return item && typeof item === 'object';
+    });
+    return req_header;
+  };
+
+  selectDomain = value => {
+    let headers = this.handleReqHeader(value, this.state.env);
+    this.setState({
+      case_env: value,
+      req_headers: headers
+    });
+  };
+
+  async initState(data) {
+    if (!this.checkInterfaceData(data)) {
+      return null;
+    }
+
+    const { req_body_other, req_body_type, req_body_is_json_schema } = data;
+    let body = req_body_other;
+    // 运行时才会进行转换
+    if (
+      this.props.type === 'inter' &&
+      req_body_type === 'json' &&
+      req_body_other &&
+      req_body_is_json_schema
+    ) {
+      let schema = {};
+      try {
+        schema = json5.parse(req_body_other);
+      } catch (e) {
+        console.log('e', e);
+        return;
+      }
+      let result = await axios.post('/api/interface/schema2json', {
+        schema: schema,
+        required: true
+      });
+      body = JSON.stringify(result.data);
+    }
+
+    this.setState(
+      {
+        ...this.state,
+        test_res_header: null,
+        test_res_body: null,
+        ...data,
+        req_body_other: body,
+        resStatusCode: null,
+        test_valid_msg: null,
+        resStatusText: null
+      },
+      () => this.props.type === 'inter' && this.initEnvState(data.case_env, data.env)
+    );
+  }
+
+  initEnvState(case_env, env) {
+    let headers = this.handleReqHeader(case_env, env);
+
+    this.setState(
+      {
+        req_headers: headers,
+        env: env
+      },
+      () => {
+        let s = !_.find(env, item => item.name === this.state.case_env);
+        if (!this.state.case_env || s) {
+          this.setState({
+            case_env: this.state.env[0].name
+          });
+        }
+      }
+    );
   }
 
   componentWillMount() {
-    let startTime = 0;
-    this.interval = setInterval(() => {
-      startTime += 500;
-      if (startTime > 5000) {
-        clearInterval(this.interval);
-      }
-      if (window.crossRequest) {
-        clearInterval(this.interval);
-        this.setState({
-          hasPlugin: true
-        })
-      } else {
-        this.setState({
-          hasPlugin: false
-        })
-      }
-    }, 500)
-    this.getInterfaceState()
+    this._crossRequestInterval = initCrossRequest(hasPlugin => {
+      this.setState({
+        hasPlugin: hasPlugin
+      });
+    });
+    this.initState(this.props.data);
   }
 
   componentWillUnmount() {
-    clearInterval(this.interval)
+    clearInterval(this._crossRequestInterval);
   }
 
   componentWillReceiveProps(nextProps) {
-    if (nextProps.data._id !== this.props.data._id) {
-      this.getInterfaceState(nextProps)
+    if (this.checkInterfaceData(nextProps.data) && this.checkInterfaceData(this.props.data)) {
+      if (nextProps.data._id !== this.props.data._id) {
+        this.initState(nextProps.data);
+      } else if (nextProps.data.interface_up_time !== this.props.data.interface_up_time) {
+        this.initState(nextProps.data);
+      }
+      if (nextProps.data.env !== this.props.data.env) {
+        this.initEnvState(this.state.case_env, nextProps.data.env);
+      }
     }
   }
 
-  componentDidMount() {
-    const { bodyType } = this.state;
-    if (bodyType && bodyType !== 'file' && bodyType !== 'form') {
-      this.loadBodyEditor()
-    }
+  handleValue(val, global) {
+    let globalValue = ArrayToObject(global);
+    return handleParamsValue(val, {
+      global: globalValue
+    });
   }
 
-  @autobind
-  getInterfaceState(nextProps) {
-    const props = nextProps || this.props;
-    const { data, type } = props;
-    const {
-      method = '',
-      path: url = '',
-      req_headers = [],
-      req_body_type,
-      req_query = [],
-      req_params = [],
-      req_body_other = '',
-      req_body_form = [],
-      basepath = '',
-      env = [],
-      case_env = '',
-      test_status = '',
-      test_res_body = '',
-      test_res_header = '',
-      mock_verify = false
-    } = data;
+  onOpenTest = d => {
+    this.setState({
+      test_script: d.text
+    });
+  };
 
-    // case 任意编辑 pathname，不管项目的 basepath
-    const pathname = (type === 'inter' ? (basepath + url) : url).replace(/\/+/g, '/');
+  handleInsertCode = code => {
+    this.aceEditor.editor.insertCode(code);
+  };
 
-    // let hasContentType = false;
-    // req_headers.forEach(headerItem => {
-    //   // TODO 'Content-Type' 排除大小写不同格式影响
-    //   if (headerItem.name === 'Content-Type'){
-    //     hasContentType = true;
-    //     headerItem.value = headerItem.value || 'application/x-www-form-urlencoded';
-    //   }
-    // })
-    // if (!hasContentType) {
-    //   req_headers.push({name: 'Content-Type', value: 'application/x-www-form-urlencoded'});
-    // }
-    // const domains = env.concat();
-    // if (domain && !env.find(item => item.domain === domain)) {
-    //   domains.push({name: 'default', domain})
-    // }
+  handleRequestBody = d => {
+    this.setState({
+      req_body_other: d.text
+    });
+  };
+
+  reqRealInterface = async () => {
+    if (this.state.loading === true) {
+      this.setState({
+        loading: false
+      });
+      return null;
+    }
+    this.setState({
+      loading: true
+    });
+
+    let options = handleParams(this.state, this.handleValue),
+      result;
+
+    try {
+      result = await crossRequest(options, this.state.pre_script, this.state.after_script);
+      result = {
+        header: result.res.header,
+        body: result.res.body,
+        status: result.res.status,
+        statusText: result.res.statusText,
+        runTime: result.runTime
+      };
+    } catch (data) {
+      result = {
+        header: data.header,
+        body: data.body,
+        status: null,
+        statusText: data.message
+      };
+    }
+    if (this.state.loading === true) {
+      this.setState({
+        loading: false
+      });
+    } else {
+      return null;
+    }
+
+    let tempJson = result.body;
+    if (tempJson && typeof tempJson === 'object') {
+      result.body = JSON.stringify(tempJson, null, '  ');
+      this.setState({
+        res_body_type: 'json'
+      });
+    } else if (isJson(result.body)) {
+      this.setState({
+        res_body_type: 'json'
+      });
+    }
+
+    // 对 返回值数据结构 和定义的 返回数据结构 进行 格式校验
+    let validResult = this.resBodyValidator(this.props.data, result.body);
+    if (!validResult.valid) {
+      this.setState({ test_valid_msg: `返回参数 ${validResult.message}` });
+    } else {
+      this.setState({ test_valid_msg: '' });
+    }
 
     this.setState({
-      method,
-      domains: env.concat(),
-      pathParam: req_params.concat(),
-      pathname,
-      query: req_query.concat(),
-      bodyForm: req_body_form.concat(),
-      headers: req_headers.concat(),
-      bodyOther: req_body_other,
-      caseEnv: case_env || (env[0] && env[0].name),
-      bodyType: req_body_type || 'form',
-      loading: false,
-      test_status: test_status,
-      validRes: [],
-      res: test_res_body,
-      resHeader: test_res_header,
-      resMockTest: mock_verify
-    }, () => {
-      if (req_body_type && req_body_type !== 'file' && req_body_type !== 'form') {
-        this.loadBodyEditor()
-      }
-      if (test_res_body) {
-        this.bindAceEditor();
-      }
-
+      resStatusCode: result.status,
+      resStatusText: result.statusText,
+      test_res_header: result.header,
+      test_res_body: result.body
     });
+  };
 
-  }
+  // 返回数据与定义数据的比较判断
+  resBodyValidator = (interfaceData, test_res_body) => {
+    const { res_body_type, res_body_is_json_schema, res_body } = interfaceData;
+    let validResult = { valid: true };
 
-  @autobind
-  reqRealInterface() {
-    if (this.state.loading) {
-      this.setState({ loading: false })
-      return;
+    if (res_body_type === 'json' && res_body_is_json_schema) {
+      const schema = json5_parse(res_body);
+      const params = json5_parse(test_res_body);
+      validResult = schemaValidator(schema, params);
     }
-    const { headers, bodyForm, pathParam, bodyOther, caseEnv, domains, method, pathname, query, bodyType } = this.state;
+
+    return validResult;
+  };
+
+  changeParam = (name, v, index, key) => {
     
-    let path = pathname;
-    
-    pathParam.forEach(item => {
-      path = path.replace(`:${item.name}`, handleMockWord(item.value) || `:${item.name}`);
-    });
-    const urlObj = URL.parse(URL.resolve(_.find(domains, item => item.name === caseEnv).domain, '.' + path));
-
-    let pathQuery = {};
-    urlObj.query && urlObj.query.split('&').forEach(item=>{
-      if(item){
-        item = item.split('=');
-        pathQuery[item[0]] = item[1];
-      }
-    })
-
-    const href = URL.format({
-      protocol: urlObj.protocol || 'http',
-      host: urlObj.host,
-      pathname: urlObj.pathname,
-      query: Object.assign(pathQuery, this.getQueryObj(query))
-    });
-    let reqBody;
-    if(bodyType === 'form'){
-      reqBody = this.arrToObj(bodyForm)
-    }else{
-      let resBody = isJson(bodyOther);
-      if(resBody === false){
-        resBody = bodyOther;
-      }else{
-        reqBody = this.handleJson(resBody)
-      }
-
-    }
-
-    this.setState({ loading: true })
-    let that = this;
-    window.crossRequest({
-      url: href,
-      method,
-      headers: this.getHeadersObj(headers),
-      data: reqBody,
-      files: bodyType === 'form' ? this.getFiles(bodyForm) : {},
-      file: bodyType === 'file' ? 'single-file' : null,
-      timeout: 8240000, //因浏览器限制，超时时间最多为两分钟
-      success: (res, header, third) => {
-        // console.log('suc', third);
-        this.setState({
-          resStatusCode: third.res.status,
-          resStatusText: third.res.statusText
-        })
-        try {
-          if (isJsonData(header)) {
-            res = json_parse(res);
-          }
-
-          const { res_body, res_body_type } = that.props.data;
-          let validRes = [];
-          let query = {};
-          that.state.query.forEach(item => {
-            query[item.name] = item.value;
-          })
-          let body = {};
-          if (that.state.bodyType === 'form') {
-            that.state.bodyForm.forEach(item => {
-              body[item.name] = item.value;
-            })
-          } else if (that.state.bodyType === 'json') {
-            body = json_parse(that.state.bodyOther);
-          }
-          if (res_body && res_body_type === 'json' && typeof res === 'object' && this.state.resMockTest === true) {
-            let tpl = MockExtra(json_parse(res_body), {
-              query: query,
-              body: body
-            })
-            validRes = Mock.valid(tpl, res)
-          }
-
-
-          if (Array.isArray(validRes) && validRes.length > 0) {
-            message.warn('请求完成, 返回数据跟接口定义不匹配');
-            validRes = validRes.map(item => {
-              return item.message
-            })
-            that.setState({ res, resHeader: header, validRes, test_status: 'invalid' })
-          } else if (Array.isArray(validRes) && validRes.length === 0) {
-            message.success('请求完成');
-            that.setState({ res, resHeader: header, validRes: ['验证通过'], test_status: 'ok' })
-          }
-          that.setState({ loading: false })
-          that.bindAceEditor()
-        } catch (e) {
-          console.error(e.message)
-        }
-      },
-      error: (err, header, third) => {
-        this.setState({
-          resStatusCode: third.res.status,
-          resStatusText: third.res.statusText
-        })
-        try {
-          err = json_parse(err);
-        } catch (e) {
-          console.log(e)
-        }
-        message.error(err || '请求异常')
-        that.setState({ res: err || '请求失败', resHeader: header, validRes: [], test_status: 'error' })
-        that.setState({ loading: false })
-        that.bindAceEditor()
-      }
-    })
-  }
-
-  // @autobind
-  // changeDomain(value) {
-  //   this.setState({ currDomain: value });
-  // }
-
-  @autobind
-  selectDomain(value) {
-    this.setState({ caseEnv: value });
-  }
-
-  @autobind
-  changeHeader(v, index, isName) {
-    const headers = json_parse(JSON.stringify(this.state.headers));
-    if (isName) {
-      headers[index].name = v;
-    } else {
-      headers[index].value = v;
-    }
-    this.setState({ headers });
-  }
-  @autobind
-  addHeader() {
-    const { headers } = this.state;
-    this.setState({ headers: headers.concat([{ name: '', value: '' }]) })
-  }
-  @autobind
-  deleteHeader(index) {
-    const { headers } = this.state;
-    this.setState({ headers: headers.filter((item, i) => +index !== +i) });
-  }
-  @autobind
-  setContentType() {
-    // const headersObj = this.getHeadersObj(this.state.headers);
-    // headersObj['Content-Type'] = type;
-    // this.setState({ headers: this.objToArr(headersObj) })
-  }
-
-  @autobind
-  changeQuery(v, index, key) {
     key = key || 'value';
-    const query = json_parse(JSON.stringify(this.state.query));
-    if (key == 'enable') {
-      query[index].enable = v;
-    } else {
-      query[index].value = v;
-      query[index].enable = true;
+    const pathParam = deepCopyJson(this.state[name]);
+
+    pathParam[index][key] = v;
+    if (key === 'value') {
+      pathParam[index].enable = !!v;
     }
-    this.setState({ query });
-  }
-  @autobind
-  addQuery() {
-    const { query } = this.state;
-    this.setState({ query: query.concat([{ name: '', value: '' }]) })
-  }
-  @autobind
-  deleteQuery(index) {
-    const { query } = this.state;
-    this.setState({ query: query.filter((item, i) => +index !== +i) });
-  }
+    this.setState({
+      [name]: pathParam
+    });
+  };
 
-  @autobind
-  changePathParam(v, index, isKey) {
-    const pathParam = JSON.parse(JSON.stringify(this.state.pathParam));
-    const name = pathParam[index].name;
-    let newPathname = this.state.pathname;
-    if (isKey) {
-      if (!name && v) {
-        newPathname += `/:${v}`;
-      } else {
-        newPathname = newPathname.replace(`/:${name}`, v ? `/:${v}` : '')
-      }
-      pathParam[index].name = v;
-    } else {
-
-      pathParam[index].value = v;
-    }
-    this.setState({ pathParam, pathname: newPathname });
-  }
-  @autobind
-  addPathParam() {
-    const { pathParam } = this.state;
-    this.setState({ pathParam: pathParam.concat([{ name: '', value: '' }]) })
-  }
-  @autobind
-  deletePathParam(index) {
-    const { pathParam } = this.state;
-    const name = pathParam[index].name;
-    const newPathname = this.state.pathname.replace(`/:${name}`, '');
-    this.setState({ pathParam: pathParam.filter((item, i) => +index !== +i), pathname: newPathname });
-  }
-
-  @autobind
-  changeBody(v, index, key) {
-    const bodyForm = json_parse(JSON.stringify(this.state.bodyForm));
+  changeBody = (v, index, key) => {
+    const bodyForm = deepCopyJson(this.state.req_body_form);
     key = key || 'value';
     if (key === 'value') {
-      bodyForm[index].enable = true;
+      bodyForm[index].enable = !!v;
       if (bodyForm[index].type === 'file') {
-        bodyForm[index].value = 'file_' + index
+        bodyForm[index].value = 'file_' + index;
       } else {
-        bodyForm[index].value = v
+        bodyForm[index].value = v;
       }
     } else if (key === 'enable') {
-      bodyForm[index].enable = v
+      bodyForm[index].enable = v;
+    }
+    this.setState({ req_body_form: bodyForm });
+  };
+
+  // 模态框的相关操作
+  showModal = (val, index, type) => {
+    let inputValue = '';
+    let cursurPosition;
+    if (type === 'req_body_other') {
+      // req_body
+      let editor = this.aceEditor.editor.editor;
+      cursurPosition = editor.session.doc.positionToIndex(editor.selection.getCursor());
+      // 获取选中的数据
+      inputValue = this.getInstallValue(val || '', cursurPosition).val;
+    } else {
+      // 其他input 输入
+      let oTxt1 = document.getElementById(`${type}_${index}`);
+      cursurPosition = oTxt1.selectionStart;
+      inputValue = this.getInstallValue(val || '', cursurPosition).val;
+      // cursurPosition = {row: 1, column: position}
     }
 
-    this.setState({ bodyForm });
-  }
-  @autobind
-  addBody() {
-    const { bodyForm } = this.state;
-    this.setState({ bodyForm: bodyForm.concat([{ name: '', value: '', type: 'text' }]) })
-  }
-  @autobind
-  deleteBody(index) {
-    const { bodyForm } = this.state;
-    this.setState({ bodyForm: bodyForm.filter((item, i) => +index !== +i) });
-  }
-
-  @autobind
-  changeMethod(value) {
-    this.setState({ method: value });
-  }
-
-  @autobind
-  changePath(e) {
-    const path = e.target.value;
-    const urlObj = URL.parse(path, true);
     this.setState({
-      query: this.objToArr(urlObj.query),
-      pathname: urlObj.pathname
-    })
-  }
-
-  @autobind
-  changeBodyType(value) {
-    this.setState({ bodyType: value }, () => {
-      if (value !== 'file' && value !== 'form') {
-        this.loadBodyEditor()
-      }
-    })
-  }
-
-  // hasCrossRequestPlugin() {
-  //   const dom = document.getElementById('y-request');
-  //   return dom.getAttribute('key') === 'yapi';
-  // }
-
-  objToArr(obj, key, value) {
-    const keyName = key || 'name';
-    const valueName = value || 'value';
-    const arr = []
-    Object.keys(obj).forEach((_key) => {
-      if (_key) {
-        arr.push({ [keyName]: _key, [valueName]: obj[_key] });
-      }
-    })
-    return arr;
-  }
-  arrToObj(arr) {
-    const obj = {};
-    arr.forEach(item => {
-      if (item)
-        if (item.name && item.type !== 'file' && item.enable) {
-          obj[item.name] = handleMockWord(item.value);
-        }
-    })
-    return obj;
-  }
-
-  getFiles(bodyForm) {
-    const files = {};
-    bodyForm.forEach(item => {
-      if (item.name && item.enable === true && item.type === 'file') {
-        files[item.name] = item.value
-      }
-    })
-    return files;
-  }
-  getQueryObj(query) {
-    const queryObj = {};
-    query.forEach(item => {
-      if (item.name && item.enable) {
-        queryObj[item.name] = handleMockWord(item.value);
-      }
-    })
-    return queryObj;
-  }
-  getHeadersObj(headers) {
-    const headersObj = {};
-    headers.forEach(item => {
-      if (item.name && item.value) {
-        headersObj[item.name] = handleMockWord(item.value);
-      }
-    })
-    return headersObj;
-  }
-
-  handleJson = (data)=>{
-    if(!data){
-      return data;
-    }
-    if(typeof data === 'string'){
-      return handleMockWord(data);
-    }else if(typeof data === 'object'){
-      for(let i in data){
-        data[i] = this.handleJson(data[i]);
-      }
-    }else{
-      return data;
-    }
-    return data;
-  }
-
-  bindAceEditor = () => {
-    mockEditor({
-      container: 'res-body-pretty',
-      data: this.state.res,
-      readOnly: true,
-      onChange: function () { }
-    })
-
-
-    mockEditor({
-      container: 'res-headers-pretty',
-      data: this.state.resHeader,
-      readOnly: true,
-      onChange: function () { }
-    })
-  }
-  loadBodyEditor = () => {
-    const that = this;
-    setTimeout(function () {
-      mockEditor({
-        container: 'body-other-edit',
-        data: that.state.bodyOther,
-        onChange: function (d) {
-          if (d.format !== true) return false;
-          that.setState({
-            bodyOther: d.text
-          })
-        }
-      })
-    }, 0);
-  }
-
-  // @autobind
-  // fileChange(e, index) {
-  //   console.log(e)
-  //   console.log(index)
-  // }
-
-  @autobind
-  onTestSwitched(checked) {
-    this.setState({
-      resMockTest: checked
+      modalVisible: true,
+      inputIndex: index,
+      inputValue,
+      cursurPosition,
+      modalType: type
     });
-  }
+  };
+
+  // 点击插入
+  handleModalOk = val => {
+    const { inputIndex, modalType } = this.state;
+    if (modalType === 'req_body_other') {
+      this.changeInstallBody(modalType, val);
+    } else {
+      this.changeInstallParam(modalType, val, inputIndex);
+    }
+
+    this.setState({ modalVisible: false });
+  };
+
+  // 根据鼠标位置往req_body中动态插入数据
+  changeInstallBody = (type, value) => {
+    const pathParam = deepCopyJson(this.state[type]);
+    // console.log(pathParam)
+    let oldValue = pathParam || '';
+    let newValue = this.getInstallValue(oldValue, this.state.cursurPosition);
+    let left = newValue.left;
+    let right = newValue.right;
+    this.setState({
+      [type]: `${left}${value}${right}`
+    });
+  };
+
+  // 获取截取的字符串
+  getInstallValue = (oldValue, cursurPosition) => {
+    let left = oldValue.substr(0, cursurPosition);
+    let right = oldValue.substr(cursurPosition);
+
+    let leftPostion = left.lastIndexOf('{{');
+    let leftPostion2 = left.lastIndexOf('}}');
+    let rightPostion = right.indexOf('}}');
+    // console.log(leftPostion, leftPostion2,rightPostion, rightPostion2);
+    let val = '';
+    // 需要切除原来的变量
+    if (leftPostion !== -1 && rightPostion !== -1 && leftPostion > leftPostion2) {
+      left = left.substr(0, leftPostion);
+      right = right.substr(rightPostion + 2);
+      val = oldValue.substring(leftPostion, cursurPosition + rightPostion + 2);
+    }
+    return {
+      left,
+      right,
+      val
+    };
+  };
+
+  // 根据鼠标位置动态插入数据
+  changeInstallParam = (name, v, index, key) => {
+    key = key || 'value';
+    const pathParam = deepCopyJson(this.state[name]);
+    let oldValue = pathParam[index][key] || '';
+    let newValue = this.getInstallValue(oldValue, this.state.cursurPosition);
+    let left = newValue.left;
+    let right = newValue.right;
+    pathParam[index][key] = `${left}${v}${right}`;
+    this.setState({
+      [name]: pathParam
+    });
+  };
+
+  // 取消参数插入
+  handleModalCancel = () => {
+    this.setState({ modalVisible: false, cursurPosition: -1 });
+  };
+
+  // 环境变量模态框相关操作
+  showEnvModal = () => {
+    this.setState({
+      envModalVisible: true
+    });
+  };
+
+  handleEnvOk = (newEnv, index) => {
+    this.setState({
+      envModalVisible: false,
+      case_env: newEnv[index].name
+    });
+  };
+
+  handleEnvCancel = () => {
+    this.setState({
+      envModalVisible: false
+    });
+  };
 
   render() {
-    const { method, domains, pathParam, pathname, query, headers, bodyForm, caseEnv, bodyType, resHeader, loading, validRes } = this.state;
-    HTTP_METHOD[method] = HTTP_METHOD[method] || {}
-    const hasPlugin = this.state.hasPlugin;
-    let isResJson = isJsonData(resHeader);
-    let path = pathname;
-    pathParam.forEach(item => {
-      let val = handleMockWord(item.value);
-      path = path.replace(`:${item.name}`, val || `:${item.name}`);
-    });
-    const pathObj = URL.parse(path);
-    path = pathObj.pathname;
-    let pathQuery = {};
-    pathObj.query && pathObj.query.split('&').forEach(item=>{
-      if(item){
-        item = item.split('=');
-        pathQuery[item[0]] = item[1];
-      }
-    })
-    const search = decodeURIComponent(URL.format({ query: Object.assign(pathQuery, this.getQueryObj(query)) }));
-
-    let validResView;
-    validResView = validRes.map((item, index) => {
-      return <div key={index}>{item}</div>
-    })
-
-
-
-
+    const {
+      method,
+      env,
+      path,
+      req_params = [],
+      req_headers = [],
+      req_query = [],
+      req_body_type,
+      req_body_form = [],
+      loading,
+      case_env,
+      inputValue,
+      hasPlugin
+    } = this.state;
+    // console.log(env);
     return (
       <div className="interface-test postman">
-        <div className={hasPlugin ? null : 'has-plugin'} >
-          {hasPlugin ? '' : <Alert
-            message={
-              <div>
-                {/* 温馨提示：当前正在使用接口测试服务，请安装我们为您免费提供的测试增强插件&nbsp;（该插件可支持任何 chrome 内核的浏览器） */}
-                重要：当前的接口测试服务，需安装免费测试增强插件 （支持所有 webkit 内核），选择下面任意一种安装方式：
-                <div>
-                  <a
-                    target="blank"
-                    href="https://chrome.google.com/webstore/detail/cross-request/cmnlfmgbjmaciiopcgodlhpiklaghbok?hl=en-US"
-                  > [Google 商店获取（需翻墙）]</a>
-                </div>
-                <div>
-                  <a
-                    target="blank"
-                    href="/api/interface/download_crx"
-                  > [手动下载] </a>
-                  <span> zip 文件解压后将 crx 文件拖入到 chrome://extensions/ </span>
-                  <a
-                    target="blank"
-                    href="http://www.jianshu.com/p/12ca04c61fc6"
-                  > [详细安装教程] </a>
-                </div>
-              </div>
-            }
-            type="warning"
+        {this.state.modalVisible && (
+          <ModalPostman
+            visible={this.state.modalVisible}
+            handleCancel={this.handleModalCancel}
+            handleOk={this.handleModalOk}
+            inputValue={inputValue}
+            envType={this.props.type}
+            id={+this.state._id}
           />
-          }
-        </div>
+        )}
 
+        {this.state.envModalVisible && (
+          <Modal
+            title="环境设置"
+            visible={this.state.envModalVisible}
+            onOk={this.handleEnvOk}
+            onCancel={this.handleEnvCancel}
+            footer={null}
+            width={800}
+            className="env-modal"
+          >
+            <ProjectEnv projectId={this.props.data.project_id} onOk={this.handleEnvOk} />
+          </Modal>
+        )}
+        <CheckCrossInstall hasPlugin={hasPlugin} />
 
-        <h2 className="interface-title" style={{ marginTop: 0 }}>请求部分&nbsp;
-          <Tooltip placement="top" title="在 '设置->环境配置' 配置 domain"><Icon type="question-circle-o" /></Tooltip>
-        </h2>
         <div className="url">
-
           <InputGroup compact style={{ display: 'flex' }}>
-            <Select disabled value={method} style={{ flexBasis: 60 }} onChange={this.changeMethod} >
-              <Option value="GET">GET</Option>
-              <Option value="POST">POST</Option>
+            <Select disabled value={method} style={{ flexBasis: 60 }}>
+              {Object.keys(HTTP_METHOD).map(name => {
+                <Option value={name.toUpperCase()}>{name.toUpperCase()}</Option>;
+              })}
+            </Select>
+            <Select
+              value={case_env}
+              style={{ flexBasis: 180, flexGrow: 1 }}
+              onSelect={this.selectDomain}
+            >
+              {env.map((item, index) => (
+                <Option value={item.name} key={index}>
+                  {item.name + '：' + item.domain}
+                </Option>
+              ))}
+              <Option value="环境配置" disabled style={{ cursor: 'pointer', color: '#2395f1' }}>
+                <Button type="primary" onClick={this.showEnvModal}>
+                  环境配置
+                </Button>
+              </Option>
             </Select>
 
-            <Select value={caseEnv} style={{ flexBasis: 180, flexGrow: 1 }} onSelect={this.selectDomain}>
-              {
-                domains.map((item, index) => (<Option value={item.name} key={index}>{item.name + '：' + item.domain}</Option>))
-              }
-            </Select>
-
-            <Input disabled value={path + search} onChange={this.changePath} spellCheck="false" style={{ flexBasis: 180, flexGrow: 1 }} />
+            <Input
+              disabled
+              value={path}
+              onChange={this.changePath}
+              spellCheck="false"
+              style={{ flexBasis: 180, flexGrow: 1 }}
+            />
           </InputGroup>
 
-          <Tooltip placement="bottom" title={(() => {
-            if (hasPlugin) {
-              return '发送请求'
-            } else {
-              return '请安装cross-request插件'
-            }
-          })()}>
+          <Tooltip
+            placement="bottom"
+            title={(() => {
+              if (hasPlugin) {
+                return '发送请求';
+              } else {
+                return '请安装 cross-request 插件';
+              }
+            })()}
+          >
             <Button
               disabled={!hasPlugin}
               onClick={this.reqRealInterface}
               type="primary"
               style={{ marginLeft: 10 }}
               icon={loading ? 'loading' : ''}
-            >{loading ? '取消' : '发送'}</Button>
+            >
+              {loading ? '取消' : '发送'}
+            </Button>
           </Tooltip>
-          <Tooltip placement="bottom" title={this.props.saveTip}>
-            <Button
-              onClick={this.props.save}
-              type="primary"
-              style={{ marginLeft: 10 }}
-            >{this.props.type === 'inter' ? '保存' : '保存'}</Button>
+
+          <Tooltip
+            placement="bottom"
+            title={() => {
+              return this.props.type === 'inter' ? '保存到测试集' : '更新该用例';
+            }}
+          >
+            <Button onClick={this.props.save} type="primary" style={{ marginLeft: 10 }}>
+              {this.props.type === 'inter' ? '保存' : '更新'}
+            </Button>
           </Tooltip>
         </div>
 
         <Collapse defaultActiveKey={['0', '1', '2', '3']} bordered={true}>
-          <Panel header="PATH PARAMETERS" key="0" className={pathParam.length === 0 ? 'hidden' : ''}>
-            {
-              pathParam.map((item, index) => {
-                return (
-                  <div key={index} className="key-value-wrap">
-                    <Input disabled value={item.name} onChange={e => this.changePathParam(e, index, true)} className="key" />
-                    <span className="eq-symbol">=</span>
-                    <AutoComplete
-                      value={item.value}
-                      onChange={e => this.changePathParam(e, index)}
-                      className="value"
-                      dataSource={mockDataSource}
-                      placeholder="参数值"
-                      optionLabelProp="value"
-                    />
-                    <Icon style={{ display: 'none' }} type="delete" className="icon-btn" onClick={() => this.deletePathParam(index)} />
-                  </div>
-                )
-              })
-            }
-            <Button style={{ display: 'none' }} type="primary" icon="plus" onClick={this.addPathParam}>添加Path参数</Button>
-          </Panel>
-          <Panel header="QUERY PARAMETERS" key="1" className={query.length === 0 ? 'hidden' : ''}>
-            {
-              query.map((item, index) => {
-                return (
-                  <div key={index} className="key-value-wrap">
-                    <Input disabled value={item.name}  className="key" />
-                    &nbsp;
-                    {item.required == 1 ?
-                      <Checkbox checked={true} disabled >enable</Checkbox> :
-                      <Checkbox checked={item.enable} onChange={e => this.changeQuery(e.target.checked, index, 'enable')}>enable</Checkbox>
+          <Panel
+            header="PATH PARAMETERS"
+            key="0"
+            className={req_params.length === 0 ? 'hidden' : ''}
+          >
+            {req_params.map((item, index) => {
+              return (
+                <div key={index} className="key-value-wrap">
+                  {/* <Tooltip
+                    placement="topLeft"
+                    title={<TooltipContent example={item.example} desc={item.desc} />}
+                  >
+                    <Input disabled value={item.name} className="key" />
+                  </Tooltip> */}
+                  <ParamsNameComponent example={item.example} desc={item.desc} name={item.name} />
+                  <span className="eq-symbol">=</span>
+                  <Input
+                    value={item.value}
+                    className="value"
+                    onChange={e => this.changeParam('req_params', e.target.value, index)}
+                    placeholder="参数值"
+                    id={`req_params_${index}`}
+                    addonAfter={
+                      <Icon
+                        type="edit"
+                        onClick={() => this.showModal(item.value, index, 'req_params')}
+                      />
                     }
-                    <span className="eq-symbol">=</span>
-                    <AutoComplete
-                      value={item.value}
-                      onChange={e => this.changeQuery(e, index)}
-                      className="value"
-                      dataSource={mockDataSource}
-                      placeholder="参数值"
-                      optionLabelProp="value"
-                    />
-                    <Icon style={{ display: 'none' }} type="delete" className="icon-btn" onClick={() => this.deleteQuery(index)} />
-                  </div>
-                )
-              })
-            }
-            <Button style={{ display: 'none' }} type="primary" icon="plus" onClick={this.addQuery}>添加Query参数</Button>
+                  />
+                </div>
+              );
+            })}
+            <Button
+              style={{ display: 'none' }}
+              type="primary"
+              icon="plus"
+              onClick={this.addPathParam}
+            >
+              添加Path参数
+            </Button>
           </Panel>
-          <Panel header="HEADERS" key="2" className={headers.length === 0 ? 'hidden' : ''}>
-            {
-              headers.map((item, index) => {
-                return (
-                  <div key={index} className="key-value-wrap">
-                    <Input disabled value={item.name} onChange={e => this.changeHeader(e, index, true)} className="key" />
-                    <span className="eq-symbol">=</span>
-                    <AutoComplete
-                      value={item.value}
-                      onChange={e => this.changeHeader(e, index)}
-                      className="value"
-                      dataSource={mockDataSource}
-                      placeholder="参数值"
-                      optionLabelProp="value"
+          <Panel
+            header="QUERY PARAMETERS"
+            key="1"
+            className={req_query.length === 0 ? 'hidden' : ''}
+          >
+            {req_query.map((item, index) => {
+              return (
+                <div key={index} className="key-value-wrap">
+                  {/* <Tooltip
+                    placement="topLeft"
+                    title={<TooltipContent example={item.example} desc={item.desc} />}
+                  >
+                    <Input disabled value={item.name} className="key" />
+                  </Tooltip> */}
+                  <ParamsNameComponent example={item.example} desc={item.desc} name={item.name} />
+                  &nbsp;
+                  {item.required == 1 ? (
+                    <Checkbox className="params-enable" checked={true} disabled />
+                  ) : (
+                    <Checkbox
+                      className="params-enable"
+                      checked={item.enable}
+                      onChange={e =>
+                        this.changeParam('req_query', e.target.checked, index, 'enable')
+                      }
                     />
-                    <Icon style={{ display: 'none' }} type="delete" className="icon-btn" onClick={() => this.deleteHeader(index)} />
-                  </div>
-                )
-              })
-            }
-            <Button style={{ display: 'none' }} type="primary" icon="plus" onClick={this.addHeader}>添加Header</Button>
+                  )}
+                  <span className="eq-symbol">=</span>
+                  <Input
+                    value={item.value}
+                    className="value"
+                    onChange={e => this.changeParam('req_query', e.target.value, index)}
+                    placeholder="参数值"
+                    id={`req_query_${index}`}
+                    addonAfter={
+                      <Icon
+                        type="edit"
+                        onClick={() => this.showModal(item.value, index, 'req_query')}
+                      />
+                    }
+                  />
+                </div>
+              );
+            })}
+            <Button style={{ display: 'none' }} type="primary" icon="plus" onClick={this.addQuery}>
+              添加Query参数
+            </Button>
+          </Panel>
+          <Panel header="HEADERS" key="2" className={req_headers.length === 0 ? 'hidden' : ''}>
+            {req_headers.map((item, index) => {
+              return (
+                <div key={index} className="key-value-wrap">
+                  {/* <Tooltip
+                    placement="topLeft"
+                    title={<TooltipContent example={item.example} desc={item.desc} />}
+                  >
+                    <Input disabled value={item.name} className="key" />
+                  </Tooltip> */}
+                  <ParamsNameComponent example={item.example} desc={item.desc} name={item.name} />
+                  <span className="eq-symbol">=</span>
+                  <Input
+                    value={item.value}
+                    disabled={!!item.abled}
+                    className="value"
+                    onChange={e => this.changeParam('req_headers', e.target.value, index)}
+                    placeholder="参数值"
+                    id={`req_headers_${index}`}
+                    addonAfter={
+                      !item.abled && (
+                        <Icon
+                          type="edit"
+                          onClick={() => this.showModal(item.value, index, 'req_headers')}
+                        />
+                      )
+                    }
+                  />
+                </div>
+              );
+            })}
+            <Button style={{ display: 'none' }} type="primary" icon="plus" onClick={this.addHeader}>
+              添加Header
+            </Button>
           </Panel>
           <Panel
             header={
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <div>BODY</div>
+                <Tooltip title="F9 全屏编辑">BODY(F9)</Tooltip>
               </div>
             }
             key="3"
-            className={HTTP_METHOD[method].request_body ? 'POST' : 'hidden'}
+            className={
+              HTTP_METHOD[method].request_body &&
+              ((req_body_type === 'form' && req_body_form.length > 0) || req_body_type !== 'form')
+                ? 'POST'
+                : 'hidden'
+            }
           >
+            <div
+              style={{ display: checkRequestBodyIsRaw(method, req_body_type) ? 'block' : 'none' }}
+            >
+              {req_body_type === 'json' && (
+                <div className="adv-button">
+                  <Button
+                    onClick={() => this.showModal(this.state.req_body_other, 0, 'req_body_other')}
+                  >
+                    高级参数设置
+                  </Button>
+                  <Tooltip title="高级参数设置只在json字段值中生效">
+                    {'  '}
+                    <Icon type="question-circle-o" />
+                  </Tooltip>
+                </div>
+              )}
 
-            <div style={{ display: HTTP_METHOD[method].request_body && bodyType !== 'form' && bodyType !== 'file' ? 'block' : 'none' }}>
-              <div id="body-other-edit" style={{ marginTop: 10, minHeight: 150 }} className="pretty-editor"></div>
+              <AceEditor
+                className="pretty-editor"
+                ref={editor => (this.aceEditor = editor)}
+                data={this.state.req_body_other}
+                mode={req_body_type === 'json' ? null : 'text'}
+                onChange={this.handleRequestBody}
+                fullScreen={true}
+              />
             </div>
 
-            {
-              HTTP_METHOD[method].request_body && bodyType === 'form' &&
-              <div>
-                {
-                  bodyForm.map((item, index) => {
+            {HTTP_METHOD[method].request_body &&
+              req_body_type === 'form' && (
+                <div>
+                  {req_body_form.map((item, index) => {
                     return (
                       <div key={index} className="key-value-wrap">
-                        <Input disabled value={item.name} onChange={e => this.changeBody(e, index, 'key')} className="key" />
+                        {/* <Tooltip
+                          placement="topLeft"
+                          title={<TooltipContent example={item.example} desc={item.desc} />}
+                        >
+                          <Input disabled value={item.name} className="key" />
+                        </Tooltip> */}
+                        <ParamsNameComponent
+                          example={item.example}
+                          desc={item.desc}
+                          name={item.name}
+                        />
                         &nbsp;
-                        {item.required == 1 ?
-                          <Checkbox checked={true} disabled >enable</Checkbox> :
-                          <Checkbox checked={item.enable} onChange={e => this.changeBody(e.target.checked, index, 'enable')}>enable</Checkbox>
-                        }
-
-
-                        <span className="eq-symbol">=</span>
-                        {item.type === 'file' ?
-                          <Input type="file" id={'file_' + index} onChange={e => this.changeBody(e, index, 'value')} multiple className="value" /> :
-                          <AutoComplete
-                            value={item.value}
-                            onChange={e => this.changeBody(e, index, 'value')}
-                            className="value"
-                            dataSource={mockDataSource}
-                            placeholder="参数值"
-                            optionLabelProp="value"
+                        {item.required == 1 ? (
+                          <Checkbox className="params-enable" checked={true} disabled />
+                        ) : (
+                          <Checkbox
+                            className="params-enable"
+                            checked={item.enable}
+                            onChange={e => this.changeBody(e.target.checked, index, 'enable')}
                           />
-
-                        }
-                        <Icon style={{ display: 'none' }} type="delete" className="icon-btn" onClick={() => this.deleteBody(index)} />
+                        )}
+                        <span className="eq-symbol">=</span>
+                        {item.type === 'file' ? (
+                          '因Chrome最新版安全策略限制，不再支持文件上传'
+                          // <Input
+                          //   type="file"
+                          //   id={'file_' + index}
+                          //   onChange={e => this.changeBody(e.target.value, index, 'value')}
+                          //   multiple
+                          //   className="value"
+                          // />
+                        ) : (
+                          <Input
+                            value={item.value}
+                            className="value"
+                            onChange={e => this.changeBody(e.target.value, index)}
+                            placeholder="参数值"
+                            id={`req_body_form_${index}`}
+                            addonAfter={
+                              <Icon
+                                type="edit"
+                                onClick={() => this.showModal(item.value, index, 'req_body_form')}
+                              />
+                            }
+                          />
+                        )}
                       </div>
-                    )
-                  })
-                }
-                <Button style={{ display: 'none' }} type="primary" icon="plus" onClick={this.addBody}>添加Form参数</Button>
-              </div>
-            }
-            {
-              HTTP_METHOD[method].request_body && bodyType === 'file' &&
-              <div>
-                <Input type="file" id="single-file"></Input>
-              </div>
-            }
-            {/*
-              method !== 'POST' &&
-              <div>GET 请求没有 BODY。</div>
-            */}
+                    );
+                  })}
+                  <Button
+                    style={{ display: 'none' }}
+                    type="primary"
+                    icon="plus"
+                    onClick={this.addBody}
+                  >
+                    添加Form参数
+                  </Button>
+                </div>
+              )}
+            {HTTP_METHOD[method].request_body &&
+              req_body_type === 'file' && (
+                <div>
+                  <Input type="file" id="single-file" />
+                </div>
+              )}
           </Panel>
         </Collapse>
 
-        <h2 className="interface-title">返回结果</h2>
-
-        <Spin spinning={this.state.loading}>
-          <h2 style={{ display: this.state.resStatusCode ? '' : 'none' }} className={'res-code ' + ((this.state.resStatusCode >= 200 && this.state.resStatusCode < 400 && !this.state.loading) ? 'success' : 'fail')}>
-            {this.state.resStatusCode + '  ' + this.state.resStatusText}</h2>
-
-          <div style={{ display: this.state.res ? '' : 'none' }} className="container-header-body">
-            <div className="header">
-              <div className="container-title">
-                <h4>Headers</h4>
+        <Tabs size="large" defaultActiveKey="res" className="response-tab">
+          <Tabs.TabPane tab="Response" key="res">
+            <Spin spinning={this.state.loading}>
+              <h2
+                style={{ display: this.state.resStatusCode ? '' : 'none' }}
+                className={
+                  'res-code ' +
+                  (this.state.resStatusCode >= 200 &&
+                  this.state.resStatusCode < 400 &&
+                  !this.state.loading
+                    ? 'success'
+                    : 'fail')
+                }
+              >
+                {this.state.resStatusCode + '  ' + this.state.resStatusText}
+              </h2>
+              <div>
+                <a rel="noopener noreferrer"  target="_blank" href="https://juejin.im/post/5c888a3e5188257dee0322af">YApi 新版如何查看 http 请求数据</a>
               </div>
-              <div id="res-headers-pretty" className="pretty-editor-header"></div>
-            </div>
-            <div className="resizer">
-              <div className="container-title">
-                <h4 style={{ visibility: 'hidden' }}>1</h4>
-              </div>
-            </div>
-            <div className="body">
-              <div className="container-title">
-                <h4>Body</h4>
-              </div>
-              <div id="res-body-pretty" className="pretty-editor-body" style={{ display: isResJson ? '' : 'none' }}></div>
-              <div
-                style={{ display: isResJson ? 'none' : '' }}
-                className="res-body-text"
-              >{this.state.res && this.state.res.toString()}</div>
-            </div>
-          </div>
-        </Spin>
+              {this.state.test_valid_msg && (
+                <Alert
+                  message={
+                    <span>
+                      Warning &nbsp;
+                      <Tooltip title="针对定义为 json schema 的返回数据进行格式校验">
+                        <Icon type="question-circle-o" />
+                      </Tooltip>
+                    </span>
+                  }
+                  type="warning"
+                  showIcon
+                  description={this.state.test_valid_msg}
+                />
+              )}
 
-        <p style={{ display: this.state.resStatusCode === null ? '' : 'none' }}>发送请求后在这里查看返回结果。</p>
-
-        <h2 className="interface-title">数据结构验证
-          <Switch style={{ verticalAlign: 'text-bottom', marginLeft: '8px' }} checked={this.state.resMockTest} onChange={this.onTestSwitched} />
-        </h2>
-        <div className={(isResJson && this.state.resMockTest) ? '' : 'none'}>
-          {(isResJson && this.state.resMockTest) ? validResView : <div><p>若开启此功能，则发送请求后在这里查看验证结果。</p><p>数据结构验证在接口编辑页面配置，YApi 将根据 Response body 验证请求返回的结果。</p></div>}
-        </div>
+              <div className="container-header-body">
+                <div className="header">
+                  <div className="container-title">
+                    <h4>Headers</h4>
+                  </div>
+                  <AceEditor
+                    callback={editor => {
+                      editor.renderer.setShowGutter(false);
+                    }}
+                    readOnly={true}
+                    className="pretty-editor-header"
+                    data={this.state.test_res_header}
+                    mode="json"
+                  />
+                </div>
+                <div className="resizer">
+                  <div className="container-title">
+                    <h4 style={{ visibility: 'hidden' }}>1</h4>
+                  </div>
+                </div>
+                <div className="body">
+                  <div className="container-title">
+                    <h4>Body</h4>
+                  </div>
+                  <AceEditor
+                    readOnly={true}
+                    className="pretty-editor-body"
+                    data={this.state.test_res_body}
+                    mode={handleContentType(this.state.test_res_header)}
+                    // mode="html"
+                  />
+                </div>
+              </div>
+            </Spin>
+          </Tabs.TabPane>
+          {this.props.type === 'case' ? (
+            <Tabs.TabPane
+              className="response-test"
+              tab={<Tooltip title="测试脚本，可断言返回结果，使用方法请查看文档">Test</Tooltip>}
+              key="test"
+            >
+              <h3 style={{ margin: '5px' }}>
+                &nbsp;是否开启:&nbsp;
+                <Switch
+                  checked={this.state.enable_script}
+                  onChange={e => this.setState({ enable_script: e })}
+                />
+              </h3>
+              <p style={{ margin: '10px' }}>注：Test 脚本只有做自动化测试才执行</p>
+              <Row>
+                <Col span="18">
+                  <AceEditor
+                    onChange={this.onOpenTest}
+                    className="case-script"
+                    data={this.state.test_script}
+                    ref={aceEditor => {
+                      this.aceEditor = aceEditor;
+                    }}
+                  />
+                </Col>
+                <Col span="6">
+                  <div className="insert-code">
+                    {InsertCodeMap.map(item => {
+                      return (
+                        <div
+                          style={{ cursor: 'pointer' }}
+                          className="code-item"
+                          key={item.title}
+                          onClick={() => {
+                            this.handleInsertCode('\n' + item.code);
+                          }}
+                        >
+                          {item.title}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Col>
+              </Row>
+            </Tabs.TabPane>
+          ) : null}
+        </Tabs>
       </div>
-    )
+    );
   }
 }
